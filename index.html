@@ -180,7 +180,7 @@
   var muteBtn=document.getElementById('mute');
   var calc=document.getElementById('calc');
 
-  var current="0", expr="", justEvaluated=false, lastOp=null, muted=false;
+  var current="0", acc=null, pendingOp=null, fresh=true, muted=false;
 
   // ---- sound ----
   var actx=null;
@@ -205,60 +205,51 @@
     if(s.indexOf('e')>-1||s.indexOf('E')>-1) return s;
     return s;
   }
-  function render(){ resultEl.textContent=current; exprEl.textContent=expr; }
+  function render(){ resultEl.textContent=current; exprEl.textContent=acc!==null&&pendingOp!==null?fmt(acc)+" "+pendingOp:""; }
   function bump(){ resultEl.classList.remove('bump'); void resultEl.offsetWidth; resultEl.classList.add('bump'); }
   var toastT;
   function toast(msg){ toastEl.textContent=msg; toastEl.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(function(){toastEl.classList.remove('show');},1500); }
 
-  // ---- logic ----
+  // ---- logic (left-to-right accumulator + pending op) ----
+  var OPS={'+':function(a,b){return a+b;},'−':function(a,b){return a-b;},'×':function(a,b){return a*b;},'÷':function(a,b){return b===0?NaN:a/b;}};
+  function compute(op,val){
+    if(acc===null){ acc=val; }
+    else if(op!==null){ var r=OPS[op](acc,val); if(!isFinite(r)){ toast("silly 💕 can't divide by zero"); return false; } acc=r; }
+    return true;
+  }
   function inputNum(d){
-    if(justEvaluated){ current="0"; expr=""; justEvaluated=false; }
+    if(fresh){ current="0"; fresh=false; }
     if(current==="0"&&d!==".") current=d;
     else if(d==="."&&current.indexOf('.')>-1) return;
     else current+=d;
     render(); bump(); soundTap();
   }
   function inputDot(){
-    if(justEvaluated){ current="0"; expr=""; justEvaluated=false; }
+    if(fresh){ current="0"; fresh=false; }
     if(current.indexOf('.')===-1) current+=".";
     render(); bump(); soundTap();
   }
   function applyOp(op){
-    if(justEvaluated){ expr=current+" "; justEvaluated=false; }
-    else if(expr===""){ expr=current+" "; }
-    else if(lastOp!==null){ evaluate(false); expr=current+" "; }
-    expr+=op+" "; lastOp=op; current="0"; render(); soundOp();
+    var val=parseFloat(current);
+    if(acc===null){ acc=val; pendingOp=op; render(); soundOp(); fresh=true; return; }
+    var ok=compute(pendingOp,val);
+    if(!ok){ acc=null; pendingOp=null; current="∞"; fresh=true; render(); bump(); soundOp(); return; }
+    pendingOp=op; current=fmt(acc); fresh=true; render(); bump(); soundOp();
   }
-  function neg(){ current=fmt(parseFloat(current)*-1); render(); bump(); soundTap(); }
-  function pct(){
-    var base = expr==="" ? 0 : parseFloat(expr);
-    current=fmt(parseFloat(current)/100 * (base||1));
-    render(); bump(); soundTap();
+  function evaluate(){
+    var val=parseFloat(current);
+    if(acc===null){ acc=val; }
+    else { var ok=compute(pendingOp,val); if(!ok){ acc=null; pendingOp=null; current="∞"; render(); bump(); soundEq(); return; } }
+    current=fmt(acc); acc=null; pendingOp=null; fresh=true; render(); bump(); soundEq(); sparkle();
   }
-  function clearAll(){ current="0"; expr=""; lastOp=null; justEvaluated=false; render(); soundTap(); }
+  function clearAll(){ current="0"; acc=null; pendingOp=null; fresh=true; render(); soundTap(); }
   function backspace(){
-    if(justEvaluated){ clearAll(); return; }
+    if(fresh){ clearAll(); return; }
     if(current.length>1) current=current.slice(0,-1); else current="0";
     render();
   }
-  var OPS={'+':function(a,b){return a+b;},'−':function(a,b){return a-b;},'×':function(a,b){return a*b;},'÷':function(a,b){return b===0?NaN:a/b;}};
-  function evaluate(final){
-    try{
-      var parts=expr.trim().split(/\s+/);
-      if(parts.length<3){ if(final){ justEvaluated=true; } if(final) soundEq(); return; }
-      var acc=parseFloat(parts[0]);
-      for(var i=1;i<parts.length;i+=2){
-        var op=parts[i], val=parseFloat(parts[i+1]);
-        if(OPS[op]===undefined) break;
-        acc=OPS[op](acc,val);
-      }
-      if(!isFinite(acc)) toast("silly 💕 can't divide by zero");
-      current=fmt(acc);
-      if(final){ expr=""; lastOp=null; justEvaluated=true; sparkle(); }
-      else { expr=current+" "; }
-      render(); bump(); if(final) soundEq();
-    }catch(e){ current="∞"; render(); }
-  }
+  function neg(){ current=fmt(parseFloat(current)*-1); render(); bump(); soundTap(); }
+  function pct(){ current=fmt(parseFloat(current)/100); render(); bump(); soundTap(); }
 
   // ---- sparkles ----
   var GLYPH=["💖","✨","🌸","💕","⭐","🎀"];
@@ -312,7 +303,7 @@
     if(b.dataset.num!==undefined) inputNum(b.dataset.num);
     else if(b.dataset.dot!==undefined) inputDot();
     else if(b.dataset.op!==undefined) applyOp(b.dataset.op);
-    else if(b.dataset.act==="equals") evaluate(true);
+    else if(b.dataset.act==="equals") evaluate();
     else if(b.dataset.act==="clear") clearAll();
     else if(b.dataset.act==="neg") neg();
     else if(b.dataset.act==="pct") pct();
@@ -325,7 +316,7 @@
     else if(k==='-'){ soundOp(); applyOp('−'); }
     else if(k==='*'){ soundOp(); applyOp('×'); }
     else if(k==='/'){ e.preventDefault(); soundOp(); applyOp('÷'); }
-    else if(k==='Enter'||k==='='){ e.preventDefault(); evaluate(true); }
+    else if(k==='Enter'||k==='='){ e.preventDefault(); evaluate(); }
     else if(k==='Backspace'){ e.preventDefault(); backspace(); }
     else if(k==='Escape'){ soundTap(); clearAll(); }
     else if(k==='%'){ soundTap(); pct(); }
